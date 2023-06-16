@@ -1,6 +1,0 @@
-Wed May 31 20:54:34 2023
-WARNING: mju_openResource: unknown file 'planar_2r.xml'
-
-Wed May 31 20:54:34 2023
-ERROR: Load model error: mjParseXML: could not open file 'planar_2r.xml'
-
