@@ -1,0 +1,8 @@
+Metadata-Version: 2.1
+Name: agility
+Version: 1.1.3
+License: MIT
+Requires-Dist: websockets>=8.1
+
+Python interface to the Agility Robotics JSON API
+

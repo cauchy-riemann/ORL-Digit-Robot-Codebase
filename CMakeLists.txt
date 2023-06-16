@@ -2,7 +2,7 @@
 #Egwuchukwu Kalu
 cmake_minimum_required(VERSION 3.10)
 include_directories(/usr/local/include/mujoco /usr/local/lib )
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY /home/kalu/Documents/Files/Engineering/Research/Code/include)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY /home/kalu/Documents/Files/Engineering/Research/Code/Main_Workspace)
 
 
 project(Planar_2R_Operational_Space_Control)
