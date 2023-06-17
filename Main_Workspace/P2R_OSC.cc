@@ -19,6 +19,7 @@
 #include <Eigen/QR>
 USING_NAMESPACE_QPOASES
 
+#define PI 3.141592653
 
 //simulation end time
 double inf = std::numeric_limits<double>::infinity();
@@ -158,69 +159,70 @@ void OSC_controller(const mjModel* m,mjData* d)
 		            dq(2),dx(2),ddx_des(2),
 	            	tau(2),C(2),b(4),beq(2);
 
-	double M[ndof*ndof];
-	double dt = 1e-6;
-	mjtNum jacp[6];
-	double Kp = 80, Kv = 10;
+	double M[ndof*ndof]; // Mass Matrix
+	double dt = 1e-6;    //Differential to calculate the derivative of the Jacobian
+	mjtNum jacp[6];      //Linear motion Jacobian
+	double Kp = 80, Kv = 10;  //Gains for the PID controller for the acceleration
 	
-	mj_energyPos(m,d);
+	mj_energyPos(m,d); //Calculate the Potential and Kinetic Energies of the system
 	mj_energyVel(m,d);
-	mj_jacSite(m,d,jacp,NULL,0);
+	mj_jacSite(m,d,jacp,NULL,0); //Calculate the Jacobian at the end-effctor
 	
-	J << jacp[0],jacp[1],
+	J << jacp[0],jacp[1], //Get the controllable parts of the Jacobian and store it in a matrix
 		 jacp[4],jacp[5];
 	
-	J_t = J.transpose();
+	J_t = J.transpose(); //Jacobian transpose
 
-	q << d->qpos[0],
+	q << d->qpos[0], //Generalized position
 		 d->qpos[1];
 
-	mj_integratePos(m,d->qpos,d->qvel,dt);
+	mj_integratePos(m,d->qpos,d->qvel,dt); //Calculate the Jacobian derivative
 	mj_kinematics(m,d);
 	mj_jacSite(m,d,jacp,NULL,0);
 	Jh << jacp[0],jacp[1],
 		 jacp[4],jacp[5];
-	dJdt = (Jh-J)/dt;
-	dq << d->qvel[0],
-		 d->qvel[1];
+	dJdt = (Jh-J)/dt;   //Jacobian derivative
+	dq << d->qvel[0], //Generalized Velocity
+		 d->qvel[1]; 
 	
-	x << *(d->site_xpos),
+	x << *(d->site_xpos), //Task Space Velocity 
 		 *(d->site_xpos+2);
-	xref << -1,1;
-	//xref <<  sin(d->time),0.5*cos(d->time)+2;
+	//xref << -1,1;
+	xref <<  sin(d->time),0.5*cos(d->time)+2; //Reference point
 	for (int i = 0; i < m->nq;++i)
-		d->qpos[i] = q(i);
+		d->qpos[i] = q(i); //Restore the old generalized position to the simulation
 
-	SQProblem dyn_qp(4,2);
-	Options options;
-	options.printLevel = PL_NONE;
+	SQProblem dyn_qp(4,2); //Set up a quadratic program with 4 variables and 2 constraints 
+	Options options; 
+	options.printLevel = PL_NONE; //Don't print the output
 	dyn_qp.setOptions(options);
-	auto Q = J_t*J;
-	mj_fullM(m,M,d->qM);
-	dx = J*dq;
-	C << d->qfrc_bias[0],
+	auto Q = J_t*J; //Hessian for the generalized accelerations' quadratic program
+	mj_fullM(m,M,d->qM); //Get the mass matrix from the simulation
+	dx = J*dq; //Task space velocity calculation
+	C << d->qfrc_bias[0], //Coriolis and gravitational forces
 		 d->qfrc_bias[1];
-	ddx_des = Kp*(xref-x)-Kv*dx;
-	auto g_tau = -2*J_t*(ddx_des-dJdt*dq);
-	real_t H[4*4] = {1,  0,  0,  0,
+	ddx_des = Kp*(xref-x)-Kv*dx; //PID law for task space acceleration
+	//ddx_des << 0,0;
+	auto g_tau = -2*J_t*(ddx_des-dJdt*dq); //Linear terms for the generalized accelerations' quadratic program
+	real_t H[4*4] = {1,  0,  0,  0,  //Hessian for the entire quadratic program
 	             	 0,  1,  0,  0,
 	                 0,  0, Q(0),Q(1),
 	                 0,  0, Q(2),Q(3)};
-	real_t g[4] = {0,0,g_tau(0),g_tau(1)};
-	real_t A[2*4] = {-1,1,M[0],M[1],
+	real_t g[4] = {0,0,g_tau(0),g_tau(1)}; //Linear terms for the entire quadratic program
+	real_t A[2*4] = {-1,1,M[0],M[1],    //Dynamics encoded into the constraint matrix
 		             0,-1,M[2],M[3]}; 
-	real_t lb[4] = {-15,-15,-inf,-inf};
-	real_t ub[4] = {15,15,inf,inf};
-	real_t lbA[2] = {-C(0),-C(1)};
+	real_t lb[4] = {-15,-15,-inf,-inf}; //Torque/Generalized acceleration lower bounds
+	real_t ub[4] = {15,15,inf,inf};     //Torque/Generalized acceleration upper bounds
+	real_t lbA[2] = {-C(0),-C(1)};      //Coriolis and gravitational terms
 	real_t ubA[2] = {-C(0),-C(1)};
-	int_t nWSR = 10;
+	int_t nWSR = 10;                    //Upper bound of 10 iterations
 
-	dyn_qp.init(H,g,A,lb,ub,lbA,ubA,nWSR,0);
+	dyn_qp.init(H,g,A,lb,ub,lbA,ubA,nWSR,0); //Run the quadratic program
 	real_t zstar[4];
 
-	dyn_qp.getPrimalSolution(zstar);
+	dyn_qp.getPrimalSolution(zstar);      //Store solution to the quadratic program and set the appropriate accelerations and torques in the simulation
 	//printf( "\ntau_1 = %e, tau_2 = %e,\nddq1 = %e, ddq2 = %e;\nobjVal = %e\n\n", 
-	//		zstar[0],zstar[1],zstar[2],zstar[3],dyn_qp.getObjVal());
+	//	zstar[0],zstar[1],zstar[2],zstar[3],dyn_qp.getObjVal());
 	
 
 	for (int i = 0; i < 4;i++)
@@ -298,8 +300,8 @@ int main(int argc, const char** argv)
     mjcb_control = OSC_controller;
 
 
-    //d->qpos[0] = 3.141592653;
-	d->qpos[0] = 0;
+	//d->qpos[0] = PI;
+	d->qpos[0] = PI;
     d->qpos[1] = 0;
     // use the first while condition if you want to simulate for a period.
     while( !glfwWindowShouldClose(window))

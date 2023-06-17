@@ -1,7 +1,7 @@
 clear all
 clc
 close all
-filename = 'Data/data.csv';
+filename = 'Data/Results/data.csv';
 
 T = readtable(filename); %check T.Properties
 VariableNames = T.Properties.VariableNames;
