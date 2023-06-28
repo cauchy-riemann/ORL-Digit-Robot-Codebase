@@ -1,5 +1,3 @@
-
-
 #include<stdbool.h> //for bool
 //#include<unistd.h> //for usleep
 //#include <math.h>
@@ -18,7 +16,6 @@
 #include <Eigen/Dense>
 #include <Eigen/QR>
 USING_NAMESPACE_QPOASES
-
 #define PI 3.141592653
 
 //simulation end time
@@ -28,14 +25,14 @@ double simend = 20;
 #define ndof 2
 
 //related to writing data to a file
-std::ofstream datafile;
+std::ofstream datafile,qpfile;
 int loop_index = 0;
 const int data_frequency = 50; //frequency at which data is written to a file
 
 
 char xmlpath[] = "Data/planar_2r.xml";
 char filename[] = "Data/Results/data.csv";
-
+char qp_data[] = "Data/qp_data.csv";
 
 // MuJoCo data structures
 mjModel* m = NULL;                  // MuJoCo model
@@ -133,7 +130,15 @@ void scroll(GLFWwindow* window, double xoffset, double yoffset)
 void init_save_data()
 {
     datafile.open(filename);
-    if (datafile.is_open()) datafile << "t,tau1,tau2,q1,q2,X,Y,\n";
+	qpfile.open(qp_data);
+    if (datafile.is_open()) datafile << "t,tau1,tau2,ddq1,ddq2,q1,q2,X,Y,\n";
+    else
+        {
+            std::cerr << "Unable to open file";
+            std::abort;
+        }
+
+	if (qpfile.is_open()) qpfile << "t,Q1,Q2,Q3,Q4,M1,M2,M3,M4,f1,f2,C1,C2\n";
     else
         {
             std::cerr << "Unable to open file";
@@ -146,9 +151,14 @@ void init_save_data()
 void save_data(const mjModel* m, mjData* d)
 {
   //data here should correspond to headers in init_save_data()
-  //seperate data by a space %f followed by space
-    datafile << d->time << ", " << d->qfrc_applied[0] << ", " << d->qfrc_applied[1] << ", " << d->qpos[0] << ", " << d->qpos[1] << ", " << *(d->site_xpos) <<", " << *(d->site_xpos+2) <<"," << std::endl;
+  //seperate da by a space %f followed by space
+    datafile << d->time << "," << d->qfrc_applied[0] << "," << d->qfrc_applied[1] << "," << d->qacc[0] << "," << d->qacc[1] << "," << d->qpos[0] << "," << d->qpos[1] << "," << *(d->site_xpos) << "," << *(d->site_xpos+2) << "," << std::endl;
 }
+void QP_data(real_t* H, real_t* A, real_t* g,real_t* q,const mjData*d)
+{
+	qpfile << d->time << "," << H[10] << "," << H[11] << "," << H[14] << ","<< H[15] << "," << A[2] << "," << A[3] << "," << A[6] << "," << A[7] << "," <<g[2] << "," <<g[3] << "," << q[0] << "," << q[1] << "," << std::endl; 
+}
+	
 
 //**************************
 
@@ -186,56 +196,51 @@ void OSC_controller(const mjModel* m,mjData* d)
 		 d->qvel[1]; 
 	
 	x << *(d->site_xpos), //Task Space Velocity 
-		 *(d->site_xpos+2);
-	//xref << -1,1;
-	xref <<  sin(d->time),0.5*cos(d->time)+2; //Reference point
+		*(d->site_xpos+2);
+	//xref << -1,-1;
+	//xref <<  2*cos(d->time),sin(3*d->time); //Reference point
+	xref <<  cos(d->time),sin(d->time); //Reference poin
 	for (int i = 0; i < m->nq;++i)
 		d->qpos[i] = q(i); //Restore the old generalized position to the simulation
 
-	SQProblem dyn_qp(4,2); //Set up a quadratic program with 4 variables and 2 constraints 
+	SQProblem dyn_qp(4,2,HST_SEMIDEF); //Set up a quadratic program with 4 variables and 2 constraints 
 	Options options; 
 	options.printLevel = PL_NONE; //Don't print the output
 	dyn_qp.setOptions(options);
 	auto Q = J_t*J; //Hessian for the generalized accelerations' quadratic program
 	mj_fullM(m,M,d->qM); //Get the mass matrix from the simulation
+
+	
 	dx = J*dq; //Task space velocity calculation
 	C << d->qfrc_bias[0], //Coriolis and gravitational forces
-		 d->qfrc_bias[1];
+		 d->qfrc_bias[1];	
 	ddx_des = Kp*(xref-x)-Kv*dx; //PID law for task space acceleration
 	//ddx_des << 0,0;
-	auto g_tau = -2*J_t*(ddx_des-dJdt*dq); //Linear terms for the generalized accelerations' quadratic program
-	real_t H[4*4] = {1,  0,  0,  0,  //Hessian for the entire quadratic program
-	             	 0,  1,  0,  0,
+	auto g_tau = -J_t*(ddx_des-dJdt*dq); //Linear terms for the generalized accelerations' quadratic program
+	real_t H[4*4] = {0.001,  0,  0,  0,  //Hessian for the entire quadratic program
+	             	 0,  0.001,  0,  0,
 	                 0,  0, Q(0),Q(1),
 	                 0,  0, Q(2),Q(3)};
+	
 	real_t g[4] = {0,0,g_tau(0),g_tau(1)}; //Linear terms for the entire quadratic program
+
 	real_t A[2*4] = {-1,1,M[0],M[1],    //Dynamics encoded into the constraint matrix
-		             0,-1,M[2],M[3]}; 
-	real_t lb[4] = {-15,-15,-inf,-inf}; //Torque/Generalized acceleration lower bounds
-	real_t ub[4] = {15,15,inf,inf};     //Torque/Generalized acceleration upper bounds
+		             0,-1,M[2],M[3]};	
+	real_t lb[4] = {-100,-100,-inf,-inf}; //Torque/Generalized acceleration lower bounds
+	real_t ub[4] = {100,100,inf,inf};     //Torque/Generalized acceleration upper bounds
 	real_t lbA[2] = {-C(0),-C(1)};      //Coriolis and gravitational terms
 	real_t ubA[2] = {-C(0),-C(1)};
-	int_t nWSR = 10;                    //Upper bound of 10 iterations
+	int_t nWSR = 20;                    //Upper bound of 10 iterations
 
 	dyn_qp.init(H,g,A,lb,ub,lbA,ubA,nWSR,0); //Run the quadratic program
 	real_t zstar[4];
 
 	dyn_qp.getPrimalSolution(zstar);      //Store solution to the quadratic program and set the appropriate accelerations and torques in the simulation
-	//printf( "\ntau_1 = %e, tau_2 = %e,\nddq1 = %e, ddq2 = %e;\nobjVal = %e\n\n", 
-	//	zstar[0],zstar[1],zstar[2],zstar[3],dyn_qp.getObjVal());
-	
 
-	for (int i = 0; i < 4;i++)
-		{
-			if (i < 2)
-				d->qfrc_applied[i] = zstar[i];
-			else
-				d->qacc[i-2] = zstar[i];
-			        
-		}
+	for (int i = 0; i < 2;i++) d->qfrc_applied[i] = zstar[i];
 	if ( loop_index%data_frequency==0) save_data(m,d);
+			//			QP_data(H,A,g,lb,d);
     loop_index = loop_index + 1;
-
 }
 //************************
 // main function
@@ -287,7 +292,7 @@ int main(int argc, const char** argv)
     glfwSetMouseButtonCallback(window, mouse_button);
     glfwSetScrollCallback(window, scroll);
 
-    double arr_view[] = {89.608063, -11.588379, 5, 0.000000, 0.000000, 2.000000};
+    double arr_view[] = {89.608063, -11.588379, 5, 0.000000, 0.000000, 0.000000};
     cam.azimuth = arr_view[0];
     cam.elevation = arr_view[1];
     cam.distance = arr_view[2];
@@ -300,9 +305,8 @@ int main(int argc, const char** argv)
     mjcb_control = OSC_controller;
 
 
-	//d->qpos[0] = PI;
-	d->qpos[0] = PI;
-    d->qpos[1] = 0;
+	d->qpos[0] = 0;
+    d->qpos[1] =0;
     // use the first while condition if you want to simulate for a period.
     while( !glfwWindowShouldClose(window))
     {

@@ -16,23 +16,26 @@
 #include <Eigen/Dense>
 #include <Eigen/QR>
 USING_NAMESPACE_QPOASES
+
 #define PI 3.141592653
+
+
 
 //simulation end time
 double inf = std::numeric_limits<double>::infinity();
 double simend = 20;
 
-#define ndof 2
+#define ndof 20
 
 //related to writing data to a file
-std::ofstream datafile,qpfile;
+std::ofstream datafile;
 int loop_index = 0;
 const int data_frequency = 50; //frequency at which data is written to a file
 
 
-char xmlpath[] = "Data/planar_2r.xml";
-char filename[] = "Data/Results/data.csv";
-char qp_data[] = "Data/qp_data.csv";
+char xmlpath[] = "Data/digit-v3.xml";
+char filename[] = "Data/Results/data_digit.csv";
+
 
 // MuJoCo data structures
 mjModel* m = NULL;                  // MuJoCo model
@@ -130,15 +133,7 @@ void scroll(GLFWwindow* window, double xoffset, double yoffset)
 void init_save_data()
 {
     datafile.open(filename);
-	qpfile.open(qp_data);
-    if (datafile.is_open()) datafile << "t,tau1,tau2,ddq1,ddq2,q1,q2,X,Y,\n";
-    else
-        {
-            std::cerr << "Unable to open file";
-            std::abort;
-        }
-
-	if (qpfile.is_open()) qpfile << "t,Q1,Q2,Q3,Q4,M1,M2,M3,M4,f1,f2,C1,C2\n";
+    if (datafile.is_open()) datafile << "time,X,Y,Z,\n";
     else
         {
             std::cerr << "Unable to open file";
@@ -151,107 +146,22 @@ void init_save_data()
 void save_data(const mjModel* m, mjData* d)
 {
   //data here should correspond to headers in init_save_data()
-  //seperate da by a space %f followed by space
-    datafile << d->time << "," << d->qfrc_applied[0] << "," << d->qfrc_applied[1] << "," << d->qacc[0] << "," << d->qacc[1] << "," << d->qpos[0] << "," << d->qpos[1] << "," << *(d->site_xpos) << "," << *(d->site_xpos+2) << "," << std::endl;
+  //seperate data by a space %f followed by space
+    datafile << d->time << ", " << *(d->site_xpos) <<", " << *(d->site_xpos+1) << ", " << *(d->site_xpos+2) <<"," << std::endl;
 }
-void QP_data(real_t* H, realt* A, real_t* g,real_t* q,const mjData*d)
-{
-	qpfile << d->time << "," << H[10] << "," << H[11] << "," << H[14] << ","<< H[15] << "," << A[2] << "," << A[3] << "," << A[6] << "," << A[7] << "," <<g[2] << "," <<g[3] << "," << q[0] << "," << q[1] << "," << std::endl; 
-}
-	
 
 //**************************
 
 void OSC_controller(const mjModel* m,mjData* d)
-{
-	Eigen::MatrixXd J(2,2),J_t(2,2),Jh(2,2),dJdt(2,2);
-	Eigen::VectorXd q(2),x(2),xref(2),
-		            dq(2),dx(2),ddx_des(2),
-	            	tau(2),C(2),b(4),beq(2);
+{	
+if ( loop_index%data_frequency==0) save_data(m,d);
+ loop_index = loop_index + 1;
 
-	double M[ndof*ndof]; // Mass Matrix
-	double dt = 1e-6;    //Differential to calculate the derivative of the Jacobian
-	mjtNum jacp[6];      //Linear motion Jacobian
-	double Kp = 80, Kv = 10;  //Gains for the PID controller for the acceleration
-	
-	mj_energyPos(m,d); //Calculate the Potential and Kinetic Energies of the system
-	mj_energyVel(m,d);
-	mj_jacSite(m,d,jacp,NULL,0); //Calculate the Jacobian at the end-effctor
-	
-	J << jacp[0],jacp[1], //Get the controllable parts of the Jacobian and store it in a matrix
-		 jacp[4],jacp[5];
-	
-	J_t = J.transpose(); //Jacobian transpose
-
-	q << d->qpos[0], //Generalized position
-		 d->qpos[1];
-
-	mj_integratePos(m,d->qpos,d->qvel,dt); //Calculate the Jacobian derivative
-	mj_kinematics(m,d);
-	mj_jacSite(m,d,jacp,NULL,0);
-	Jh << jacp[0],jacp[1],
-		 jacp[4],jacp[5];
-	dJdt = (Jh-J)/dt;   //Jacobian derivative
-	dq << d->qvel[0], //Generalized Velocity
-		 d->qvel[1]; 
-	
-	x << *(d->site_xpos), //Task Space Velocity 
-		*(d->site_xpos+2);
-	xref << -1,-1;
-	//xref <<  2*cos(d->time),sin(3*d->time); //Reference point
-	for (int i = 0; i < m->nq;++i)
-		d->qpos[i] = q(i); //Restore the old generalized position to the simulation
-
-	SQProblem dyn_qp(4,2,HST_SEMIDEF); //Set up a quadratic program with 4 variables and 2 constraints 
-	Options options; 
-	options.printLevel = PL_NONE; //Don't print the output
-	dyn_qp.setOptions(options);
-	auto Q = J_t*J; //Hessian for the generalized accelerations' quadratic program
-	mj_fullM(m,M,d->qM); //Get the mass matrix from the simulation
-
-	
-	dx = J*dq; //Task space velocity calculation
-	C << d->qfrc_bias[0], //Coriolis and gravitational forces
-		 d->qfrc_bias[1];	
-	//ddx_des = Kp*(xref-x)-Kv*dx; //PID law for task space acceleration
-	ddx_des << 0,0;
-	auto g_tau = -J_t*(ddx_des-dJdt*dq); //Linear terms for the generalized accelerations' quadratic program
-	real_t H[4*4] = {1,  0,  0,  0,  //Hessian for the entire quadratic program
-	             	 0,  1,  0,  0,
-	                 0,  0, Q(0),Q(1),
-	                 0,  0, Q(2),Q(3)};
-	
-	real_t g[4] = {0,0,g_tau(0),g_tau(1)}; //Linear terms for the entire quadratic program
-
-	real_t A[2*4] = {-1,1,M[0],M[1],    //Dynamics encoded into the constraint matrix
-		             0,-1,M[2],M[3]};	
-	real_t lb[4] = {-30,-30,-inf,-inf}; //Torque/Generalized acceleration lower bounds
-	real_t ub[4] = {30,30,inf,inf};     //Torque/Generalized acceleration upper bounds
-	real_t lbA[2] = {-C(0),-C(1)};      //Coriolis and gravitational terms
-	real_t ubA[2] = {-C(0),-C(1)};
-	int_t nWSR = 20;                    //Upper bound of 10 iterations
-
-	dyn_qp.init(H,g,A,lb,ub,lbA,ubA,nWSR,0); //Run the quadratic program
-	real_t zstar[4];
-
-	dyn_qp.getPrimalSolution(zstar);      //Store solution to the quadratic program and set the appropriate accelerations and torques in the simulation
-
-	for (int i = 0; i < 2;i++) d->qfrc_applied[i] = zstar[i];
-	if ( loop_index%data_frequency==0)
-		{
-			save_data(m,d);
-			QP_data(H,A,g,lb,d);
-		}
-    loop_index = loop_index + 1;
 }
 //************************
 // main function
 int main(int argc, const char** argv)
 {
-
-    // activate software
-    mj_activate("mjkey.txt");
-
     // load and compile model
     char error[1000] = "Could not load binary model";
 
@@ -294,21 +204,22 @@ int main(int argc, const char** argv)
     glfwSetMouseButtonCallback(window, mouse_button);
     glfwSetScrollCallback(window, scroll);
 
-    double arr_view[] = {89.608063, -11.588379, 5, 0.000000, 0.000000, 0.000000};
+    /*double arr_view[] = {89.608063, -11.588379, 5, 0.000000, 0.000000, 2.000000};
     cam.azimuth = arr_view[0];
     cam.elevation = arr_view[1];
     cam.distance = arr_view[2];
     cam.lookat[0] = arr_view[3];
     cam.lookat[1] = arr_view[4];
-    cam.lookat[2] = arr_view[5];
+    cam.lookat[2] = arr_view[5];*/
 
     init_save_data();
     // install control callback
     mjcb_control = OSC_controller;
 
 
-	d->qpos[0] = PI/2;
-    d->qpos[1] =PI/2;
+	//d->qpos[0] = PI;
+	//d->qpos[0] = PI;
+    //d->qpos[1] = 0;
     // use the first while condition if you want to simulate for a period.
     while( !glfwWindowShouldClose(window))
     {
