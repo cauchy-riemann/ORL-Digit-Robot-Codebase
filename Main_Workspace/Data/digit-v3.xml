@@ -1,6 +1,6 @@
 <mujoco model='digit-v3'>
   <compiler angle='degree' eulerseq='xyz' meshdir='stl/'/>
-  <option iterations='50' solver='Newton' timestep='0.0005' gravity='0 0 -9.806'/>
+  <option iterations='50' solver='Newton' timestep='0.0002' integrator='RK4' gravity='0 0 -9.806'/>
   <size nconmax='100' />
   <asset>
     <material name='collision' rgba='0.1 0.5 0.9 0.4'/>
@@ -59,7 +59,7 @@
     <joint solreflimit='0.001 1' />
   </default>
   <worldbody>
-    <geom name='ground' type='plane' size='0 0 1' conaffinity='15' condim='3' friction='0.7 0.01 0.005' pos='0 0 0' priority='100' />
+    <geom name='ground' type='plane' size='0 0 1' conaffinity='15' condim='3' friction='0.7 0.01 0.005' pos='0 0 -0.88' priority='100' />
     <body name='base' pos='0 0 0' euler='-0 0 -0'>
       <inertial pos='0.001637 0.0002 0.259307' mass='15.028392' fullinertia='0.375905 0.344193 0.098732 -8.8e-05 0.0085 6.6e-05' />
       <joint type='free' limited='false'/>
@@ -70,6 +70,7 @@
       <geom type='mesh' mesh='base-4' pos='-0.001 -0.12 0.4' euler='10 -90 0' material='robot'/>
       <geom type='box' size='0.0975 0.087 0.245' pos='0.008 0 0.21' euler='-0 0 -0' friction='0.7 0.01 0.005'  mass='15.028392' class='collision'/>
       <geom type='cylinder' size='0.05 0.0325' pos='0.02 0 0.49' euler='-0 0 -0' friction='0.7 0.01 0.005'  mass='15.028392' class='collision'/>
+	  <site name="pelvis" pos="0 0 0" size="0.01"/>
       <body name='left-hip-roll' pos='-0.001 0.091 0' euler='21.5 -90 0'>
         <inertial pos='-0.001967 0.000244 0.031435' mass='0.915088' fullinertia='0.001017 0.001148 0.000766 -3e-06 1.3e-05 -4e-06' />
         <joint name='left-hip-roll' type='hinge' axis='0 0 1' range='-60 60' stiffness='0' frictionloss='1' damping='1' armature='0.173824' limited='true' pos='0 0 0'/>
